@@ -9,7 +9,7 @@ from sklearn.cluster import KMeans
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
-from mlxtend.frequent_patterns import apriori, association_rules
+import seaborn as sns
 import joblib
 import base64
 from datetime import datetime
@@ -110,13 +110,11 @@ fig_dendro.update_layout(height=600, title="Hierarchical Clustering Dendrogram")
 st.plotly_chart(fig_dendro, use_container_width=True)
 
 # Association Rules
-st.subheader("🔗 Association Rules (Apriori)")
-# Discretize for Apriori
-df_disc = pd.get_dummies(df[['industry', 'company_size', 'subscription_tier', 'churn_status']])
-freq_items = apriori(df_disc, min_support=0.1, use_colnames=True)
-rules = association_rules(freq_items, metric="confidence", min_threshold=0.6)
-rules = rules.nlargest(20, 'lift')[['antecedents', 'consequents', 'support', 'confidence', 'lift']]
-st.dataframe(rules.style.format({'support': '{:.2%}', 'confidence': '{:.2%}', 'lift': '{:.2f}'}).background_gradient())
+# Simple Industry-Tier-Churn Correlation Table (No mlxtend needed)
+st.subheader("🔗 Client Pattern Insights")
+corr_data = pd.crosstab(df['industry'], df['churn_status'], normalize='index').round(3)
+corr_data['AI_Hours'] = df.groupby('industry')['ai_feature_usage_hours'].mean().round(1)
+st.dataframe(corr_data.style.background_gradient().format({'AI_Hours': '{:.1f}'}))
 
 # Sankey
 st.subheader("📊 Client Journey Sankey")
