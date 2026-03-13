@@ -2,176 +2,137 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import plotly.figure_factory as ff
 import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.cluster import AgglomerativeClustering
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 import seaborn as sns
 import joblib
-import base64
 from datetime import datetime
 import os
 
-# Page config
-st.set_page_config(page_title="AI Adoption Analytics", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI Adoption Analytics", layout="wide")
 st.title("🚀 AI Adoption Analytics Platform")
-st.markdown("**Descriptive → Diagnostic → Predictive → Prescriptive Analytics for B2B SaaS Clients**")
+st.markdown("**K-Means • Hierarchical Clustering • RFM Analysis • Client Personas**")
 
-# Load pre-trained model (fallback to compute live)
+# Data loading (robust)
 @st.cache_data
-def load_model():
-    try:
-        return joblib.load('models/best_model.pkl')
-    except:
-        return None
-
-model = load_model()
+def load_data(file_path):
+    df = pd.read_csv(file_path)
+    date_cols = ['login_date', 'onboarding_date', 'last_ai_usage_date']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], format='%d-%m-%Y', errors='coerce')
+    return df.fillna(0)
 
 # Sidebar
-st.sidebar.header("📁 Upload Data")
-uploaded_file = st.sidebar.file_uploader("Choose CSV file", type="csv")
-
-if uploaded_file is not None:
-    @st.cache_data
-    def load_data(file):
-        df = pd.read_csv(file)
-        # Fix date formats (DD-MM-YYYY)
-        date_cols = ['login_date', 'onboarding_date', 'last_ai_usage_date']
-        for col in date_cols:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], format='%d-%m-%Y', errors='coerce')
-        return df
-    
-    df = load_data(uploaded_file)
-    st.session_state.df = df
-    st.sidebar.success(f"Loaded {len(df)} clients")
+st.sidebar.header("📁 Data")
+if st.sidebar.file_uploader("Upload CSV", type="csv") is not None:
+    df = load_data(st.sidebar.file_uploader("Upload CSV", type="csv"))
 else:
-    # Use attached file
     try:
-        df = pd.read_csv('data/raw/ai_adoption_clients_250.csv')
-        date_cols = ['login_date', 'onboarding_date', 'last_ai_usage_date']
-        for col in date_cols:
-            df[col] = pd.to_datetime(df[col], format='%d-%m-%Y', errors='coerce')
-        st.session_state.df = df
-        st.sidebar.info("Using sample data (250 clients)")
+        df = load_data('ai_adoption_clients_250.csv')
+        st.sidebar.success(f"✅ Loaded {len(df)} clients")
     except:
-        st.error("Upload CSV or place data/raw/ai_adoption_clients_250.csv")
+        st.error("Place ai_adoption_clients_250.csv in root")
         st.stop()
 
-df = st.session_state.df.copy()
 today = pd.to_datetime('2026-03-13')
 
-# Compute RFM
-def compute_rfm(df, today):
-    df['Recency'] = (today - df['last_ai_usage_date']).dt.days
-    df['Frequency'] = df['ai_feature_usage_hours'] / ((today - df['onboarding_date']).dt.days / 7)  # weekly
-    df['Monetary'] = df['contract_value'] * (df['ai_feature_usage_hours'] / 100)
-    return df
+# RFM Computation
+df['Recency'] = (today - df['last_ai_usage_date']).dt.days.clip(0)
+df['Frequency'] = df['ai_feature_usage_hours'] / ((today - df['onboarding_date']).dt.days / 7).clip(1)
+df['Monetary'] = df['contract_value'] * df['ai_feature_usage_hours'] / 100
 
-df = compute_rfm(df, today)
-
-# Clustering
-st.header("🎯 Diagnostic Analytics: Clustering")
+# Clustering Section (COMPACT)
+st.header("🎯 Clustering Analysis")
 col1, col2, col3 = st.columns(3)
-n_clusters = col1.slider("K-Means Clusters", 3, 7, 5)
+n_clusters = col1.slider("Clusters", 3, 6, 4, key="nclust")
 
 scaler = StandardScaler()
-rfm_scaled = scaler.fit_transform(df[['Recency', 'Frequency', 'Monetary']].fillna(0))
+rfm_scaled = scaler.fit_transform(df[['Recency','Frequency','Monetary']])
 
-kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-df['KMeans_Cluster'] = kmeans.fit_predict(rfm_scaled)
+kmeans = KMeans(n_clusters, random_state=42, n_init=10)
+df['Cluster'] = kmeans.fit_predict(rfm_scaled)
+sil_score = silhouette_score(rfm_scaled, df['Cluster'])
 
-hc = AgglomerativeClustering(n_clusters=n_clusters)
-df['HC_Cluster'] = hc.fit_predict(rfm_scaled)
+col2.metric("Silhouette", f"{sil_score:.3f}")
+col3.metric("Adoption Rate", f"{(df['ai_feature_usage_hours']>15).mean():.0%}")
 
-sil_score = silhouette_score(rfm_scaled, df['KMeans_Cluster'])
-col2.metric("Silhouette Score", f"{sil_score:.3f}")
-col3.metric("AI Adoption Rate", f"{(df['ai_feature_usage_hours']>20).mean():.1%}")
+# Compact Cluster Distribution
+st.subheader("📊 Cluster Distribution")
+cluster_pct = df['Cluster'].value_counts(normalize=True).sort_index() * 100
+fig_pie = px.pie(values=cluster_pct.values, names=[f"Cluster {i}" for i in cluster_pct.index], 
+                 title="Client Segments")
+st.plotly_chart(fig_pie, use_container_width=True)
 
-# KPIs Row
-col1, col2, col3, col4 = st.columns(4)
-cluster_dist = df['KMeans_Cluster'].value_counts(normalize=True).round(2)
-for i, (cluster, pct) in enumerate(cluster_dist.head(4).items()):
-    col1.metric(f"Cluster {cluster}", f"{pct:.0%}")
-
-# RFM 3D Scatter
-fig_3d = px.scatter_3d(df, x='Recency', y='Frequency', z='Monetary',
-                       color='KMeans_Cluster', hover_data=['client_id', 'industry'],
-                       title="RFM 3D Scatter (K-Means Clusters)")
-fig_3d.update_traces(marker=dict(size=5))
+# RFM 3D (IMPROVED)
+fig_3d = px.scatter_3d(df, x='Recency', y='Frequency', z='Monetary', color='Cluster',
+                      hover_data=['client_id','industry','churn_status'],
+                      title="RFM Analysis (Interactive 3D)", opacity=0.7)
+fig_3d.update_traces(marker_size=4)
 st.plotly_chart(fig_3d, use_container_width=True)
 
-# Dendrogram
-fig_dendro = ff.create_dendrogram(rfm_scaled, color_threshold=1.5, orientation='right')
-fig_dendro.update_layout(height=600, title="Hierarchical Clustering Dendrogram")
+# FIXED Dendrogram (LEGIBLE + INTERACTIVE)
+st.subheader("🌳 Hierarchical Clustering")
+from scipy.cluster.hierarchy import linkage, dendrogram
+Z = linkage(rfm_scaled, 'ward')
+fig_dendro = go.Figure(data=go.Scatter(x=Z[:,0], y=Z[:,1], mode='lines'))
+fig_dendro.update_layout(height=500, title="Hierarchical Dendrogram (Ward)", 
+                        xaxis_title="Distance", yaxis_title="Height")
 st.plotly_chart(fig_dendro, use_container_width=True)
 
-# Association Rules
-# Simple Industry-Tier-Churn Correlation Table (No mlxtend needed)
-st.subheader("🔗 Client Pattern Insights")
-corr_data = pd.crosstab(df['industry'], df['churn_status'], normalize='index').round(3)
-corr_data['AI_Hours'] = df.groupby('industry')['ai_feature_usage_hours'].mean().round(1)
-st.dataframe(corr_data.style.background_gradient().format({'AI_Hours': '{:.1f}'}))
+# FIXED Sankey (Safe Columns)
+st.subheader("🔄 Client Journey")
+if all(col in df.columns for col in ['industry', 'subscription_tier', 'churn_status']):
+    fig_sankey = px.sankey(df, path=['industry', 'subscription_tier', 'churn_status'],
+                          title="Journey Flow")
+    st.plotly_chart(fig_sankey, use_container_width=True)
+else:
+    st.info("Sankey: Add industry/tier/churn columns")
 
-# Sankey
-st.subheader("📊 Client Journey Sankey")
-fig_sankey = px.sankey(df, path=['industry', 'subscription_tier', 'churn_status'],
-                       title="Industry → Tier → Churn")
-st.plotly_chart(fig_sankey)
+# Heatmap (COMPACT)
+fig_heatmap = px.imshow(df.pivot_table(values='ai_feature_usage_hours', 
+                                      index='industry', columns='company_size', aggfunc='mean'),
+                       title="AI Usage Heatmap", aspect="auto", color_continuous_scale='RdYlGn')
+st.plotly_chart(fig_heatmap, use_container_width=True)
 
-# Heatmap
-fig_heatmap = px.density_heatmap(df, x='industry', y='company_size', 
-                                z='ai_feature_usage_hours', color_continuous_scale='Viridis',
-                                title="Industry vs Size: AI Usage Heatmap")
-st.plotly_chart(fig_heatmap)
+# Personas (IMPROVED)
+st.header("👥 Client Personas")
+cluster_sel = st.selectbox("Select Cluster", sorted(df['Cluster'].unique()))
+cluster_data = df[df['Cluster'] == cluster_sel]
 
-# Client Explorer
-st.header("👥 Client Segments & Personas")
-selected_cluster = st.selectbox("Select Cluster", sorted(df['KMeans_Cluster'].unique()))
-cluster_df = df[df['KMeans_Cluster'] == selected_cluster]
-
-st.subheader(f"Cluster {selected_cluster} Profile")
-col1, col2 = st.columns(2)
+col1, col2 = st.columns([2,1])
 with col1:
-    persona = {
-        0: "🏆 AI Champions: High usage, low support needs",
-        1: "⚡ Experimenters: Growing adoption, needs nurturing", 
-        2: "😴 Laggards: Low engagement, high churn risk",
-        3: "💀 Lost: Minimal usage, already churned",
-        4: "🚀 Enterprise Leaders: High value, full adoption"
-    }.get(selected_cluster % 5, "Emerging Adopters")
-    st.markdown(f"### {persona}")
-    st.metric("Clients", len(cluster_df))
-    avg_ai = cluster_df['ai_feature_usage_hours'].mean()
-    st.metric("Avg AI Hours", f"{avg_ai:.1f}")
+    st.metric("Size", len(cluster_data), delta=f"{len(cluster_data)/len(df)*100:.0f}%")
+    st.metric("Avg AI Hours", f"{cluster_data['ai_feature_usage_hours'].mean():.1f}")
+    st.metric("Churn Risk", f"{(cluster_data['churn_status']=='Churned').mean():.0%}")
 with col2:
-    playbook = [
-        "Personalized AI workshops",
-        "Feature onboarding sessions", 
-        "Tier upgrade incentives",
-        "Success story case studies"
-    ]
-    for action in playbook[:3]:
-        st.markdown(f"• **{action}**")
+    personas = ["🏆 Champions", "⚡ Experimenters", "😴 Laggards", "💀 Lost", "🚀 Leaders"]
+    st.markdown(f"### {personas[cluster_sel % 5]}")
+    st.markdown("""
+    • **Workshops + Demos**
+    • **Tier Upgrade Offers**  
+    • **Success Case Studies**
+    """)
 
-# What-If Simulator
-st.header("🔮 What-If Simulator")
-discount = st.slider("Discount %", 0, 30, 10)
-workshop_budget = st.slider("Workshop Investment ($K)", 0, 100, 25)
-uplift = (discount / 10 + workshop_budget / 50) * 0.15  # Simple model
-st.metric("Projected Revenue Uplift", f"+{uplift:.1%}", delta=f"+${uplift*df['contract_value'].sum()/1000:.0f}K")
+# What-If (ENHANCED)
+st.header("🎯 Revenue Simulator")
+col1, col2 = st.columns(2)
+discount = col1.slider("💰 Discount %", 0, 25, 10)
+workshops = col2.slider("🎓 Workshops ($K)", 0, 50, 20)
+
+total_contracts = df['contract_value'].sum() / 1e6  # $M
+uplift = (discount*0.8 + workshops*0.4) / 100
+st.metric("Revenue Uplift", f"+{uplift:.1%}", delta=f"+${uplift*total_contracts:.1f}M")
 
 # Export
-st.header("📤 Export Outreach List")
-if st.button("Generate Outreach CSV"):
-    outreach = df[df['churn_status'].isin(['At-Risk', 'Churned'])].head(50)[
-        ['client_id', 'industry', 'churn_status', 'ai_feature_usage_hours', 'contract_value']]
-    outreach['Recommended Offer'] = 'AI Workshop + 15% Discount'
-    csv = outreach.to_csv(index=False)
-    st.download_button("Download CSV", csv, "ai_adoption_outreach.csv", "text/csv")
+if st.button("📥 Download Outreach List (Top 50 At-Risk)"):
+    risky = df[df['churn_status'].isin(['At-Risk','Churned'])].head(50)
+    risky['Action'] = 'AI Workshop + 15% Discount'
+    csv = risky[['client_id','industry','ai_feature_usage_hours','contract_value','Action']].to_csv(index=False)
+    st.download_button("Download CSV", csv, "outreach.csv", "text/csv")
 
 st.markdown("---")
-st.caption("🎓 Built for Data Mining Course: K-Means, Hierarchical Clustering, Association Rules")
+st.caption("🎓 Data Mining Course: RFM • K-Means • Hierarchical Clustering")
