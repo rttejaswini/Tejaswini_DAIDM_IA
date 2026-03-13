@@ -147,7 +147,8 @@ with col1:
     }.get(selected_cluster % 5, "Emerging Adopters")
     st.markdown(f"### {persona}")
     st.metric("Clients", len(cluster_df))
-    st.metric("Avg AI Hours", cluster_df['ai_feature_usage_hours'].mean():.1f)
+    avg_ai = cluster_df['ai_feature_usage_hours'].mean()
+    st.metric("Avg AI Hours", f"{avg_ai:.1f}")
 with col2:
     playbook = [
         "Personalized AI workshops",
